@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Case Management | Missing Person Recognition System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <nav class="top-nav">
+      <a class="nav-link" href="/app.html">Recognition Dashboard</a>
+      <a class="nav-link active" href="/cases.html">Case Management</a>
+      <a id="userAccessLink" class="nav-link" href="/users.html">User Access</a>
+    </nav>
+
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Investigation Workspace</p>
+        <h1>Case Lifecycle and Review Control</h1>
+        <p class="lead">Manage missing-person case status, prioritize urgent profiles, and verify borderline AI matches from a separate workflow page.</p>
+      </div>
+      <div class="status-card">
+        <span class="status-label">Secure Session</span>
+        <p id="authState" class="muted">Checking session...</p>
+        <button id="logoutButton" type="button">Logout</button>
+      </div>
+    </section>
+
+    <section class="case-grid">
+      <article class="panel">
+        <div class="panel-head">
+          <h2>Case Lifecycle</h2>
+          <p>Priority-ranked cases with lifecycle updates and sighting analytics.</p>
+        </div>
+        <div id="caseList" class="case-stack"></div>
+      </article>
+
+      <div class="case-stack">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Review Queue</h2>
+            <p>Borderline AI matches that require manual verification.</p>
+          </div>
+          <div id="reviewQueueList" class="history-grid"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Unknown Face Tracker</h2>
+            <p>Repeated unmatched sightings grouped for investigation follow-up.</p>
+          </div>
+          <div id="unknownSightingsList" class="history-grid"></div>
+        </article>
+      </div>
+    </section>
+
+    <footer class="page-footer muted">
+      Developed by Maniesh, Sree Harish, Pragas Pathy, and Suwin
+    </footer>
+  </main>
+  <script defer src="/cases.js"></script>
+</body>
+</html>

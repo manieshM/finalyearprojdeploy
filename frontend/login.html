@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login | Missing Person Recognition System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Cloud Based Final Year Project</p>
+        <h1>Missing Person Face Recognition System</h1>
+        <p class="lead">Create an account, sign in with email, or reset your password. Operational tools are available after login on a separate secure page.</p>
+      </div>
+      <div class="status-card">
+        <span class="status-label">Access</span>
+        <strong>Role-Based Sign In</strong>
+        <p class="muted">Admin and approved users enter through separate sign-in paths.</p>
+      </div>
+    </section>
+
+    <section class="auth-grid">
+      <article class="panel auth-card">
+        <div class="panel-head">
+          <h2>Admin Login</h2>
+          <p>Restricted portal for the system administrator.</p>
+        </div>
+        <form id="adminForm" class="stack">
+          <label>
+            <span>Admin ID</span>
+            <input name="adminId" placeholder="Enter admin ID" required>
+          </label>
+          <label>
+            <span>Admin Password</span>
+            <input name="password" type="password" required>
+          </label>
+          <button type="submit">Login as Admin</button>
+        </form>
+        <p id="adminMessage" class="message"></p>
+      </article>
+
+      <article class="panel auth-card">
+        <div class="panel-head">
+          <h2>User Sign In</h2>
+          <p>Use your existing approved user account.</p>
+        </div>
+        <form id="authForm" class="stack">
+          <label>
+            <span>Email</span>
+            <input name="email" placeholder="name@example.com" required>
+          </label>
+          <label>
+            <span>Password</span>
+            <input name="password" type="password" required>
+          </label>
+          <button type="submit">Login as User</button>
+        </form>
+        <p id="authMessage" class="message"></p>
+      </article>
+
+      <article class="panel auth-card">
+        <div class="panel-head">
+          <h2>Sign Up</h2>
+          <p>Create a new email-based account.</p>
+        </div>
+        <form id="signupForm" class="stack">
+          <label>
+            <span>New Email</span>
+            <input name="email" placeholder="newuser@example.com" required>
+          </label>
+          <label>
+            <span>Create Password</span>
+            <input name="password" type="password" minlength="6" required>
+          </label>
+          <button type="submit">Create Account</button>
+        </form>
+        <p id="signupMessage" class="message"></p>
+      </article>
+
+      <article class="panel auth-card">
+        <div class="panel-head">
+          <h2>Forgot Password</h2>
+          <p>Request a demo reset code, then set a new password.</p>
+        </div>
+        <form id="forgotForm" class="stack">
+          <label>
+            <span>Reset Email</span>
+            <input name="email" placeholder="name@example.com" required>
+          </label>
+          <label>
+            <span>Reset Code</span>
+            <input name="code" placeholder="Enter demo code">
+          </label>
+          <label>
+            <span>New Password</span>
+            <input name="newPassword" type="password" minlength="6">
+          </label>
+          <button type="submit">Reset Password</button>
+        </form>
+        <p id="forgotMessage" class="message"></p>
+      </article>
+    </section>
+
+    <footer class="page-footer muted">
+      Developed by Maniesh, Sree Harish, Pragas Pathy, and Suwin
+    </footer>
+  </main>
+  <script defer src="/auth.js"></script>
+</body>
+</html>

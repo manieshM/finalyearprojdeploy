@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>User Access | Missing Person Recognition System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <nav class="top-nav">
+      <a class="nav-link" href="/app.html">Recognition Dashboard</a>
+      <a class="nav-link" href="/cases.html">Case Management</a>
+      <a class="nav-link active" href="/users.html">User Access</a>
+    </nav>
+
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Admin Workspace</p>
+        <h1>User Access Control</h1>
+        <p class="lead">Create user accounts and approve or revoke case-edit access from a dedicated admin page.</p>
+      </div>
+      <div class="status-card">
+        <span class="status-label">Admin Session</span>
+        <p id="authState" class="muted">Checking session...</p>
+        <button id="logoutButton" type="button">Logout</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Create User</h2>
+        <p>Add new website users who can sign in with their own credentials.</p>
+      </div>
+      <form id="userForm" class="auth-form">
+        <label>
+          <span>Email</span>
+          <input name="email" type="email" required>
+        </label>
+        <label>
+          <span>Password</span>
+          <input name="password" type="password" minlength="6" required>
+        </label>
+        <label>
+          <span>Role</span>
+          <select name="role">
+            <option value="operator">Operator</option>
+            <option value="admin">Admin</option>
+          </select>
+        </label>
+        <button type="submit">Create User</button>
+      </form>
+      <p id="userMessage" class="message"></p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Current Users</h2>
+        <p>Approve or revoke case-edit permissions for non-admin users.</p>
+      </div>
+      <div id="userList" class="history-grid"></div>
+    </section>
+
+    <footer class="page-footer muted">
+      Developed by Maniesh, Sree Harish, Pragas Pathy, and Suwin
+    </footer>
+  </main>
+  <script defer src="/users.js"></script>
+</body>
+</html>

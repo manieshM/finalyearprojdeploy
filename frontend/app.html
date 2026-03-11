@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard | Missing Person Recognition System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <nav class="top-nav">
+      <a class="nav-link active" href="/app.html">Recognition Dashboard</a>
+      <a class="nav-link" href="/cases.html">Case Management</a>
+      <a id="userAccessLink" class="nav-link" href="/users.html">User Access</a>
+    </nav>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Protected Workspace</p>
+        <h1>Missing Person Recognition System</h1>
+        <p class="lead">Register profiles, run recognition scans, review history, and manage access after sign in.</p>
+      </div>
+      <div class="status-card">
+        <span class="status-label">Login Information</span>
+        <p id="authState" class="muted">Checking session...</p>
+        <button id="logoutButton" type="button">Logout</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Operations Dashboard</h2>
+        <p>Live totals for registered cases and recognition activity.</p>
+      </div>
+      <div id="dashboardCards" class="stats-grid"></div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <div class="panel-head">
+          <h2>Register Missing Person</h2>
+          <p>Create a protected case record from a clear front-facing image.</p>
+        </div>
+        <form id="registerForm" class="stack">
+          <label>
+            <span>Name</span>
+            <input name="name" required>
+          </label>
+          <label>
+            <span>Age</span>
+            <input name="age">
+          </label>
+          <label>
+            <span>Status</span>
+            <input name="status" value="Missing">
+          </label>
+          <label>
+            <span>Last Seen</span>
+            <input name="lastSeen" placeholder="Area, date, location">
+          </label>
+          <label>
+            <span>Emergency Contact</span>
+            <input name="contact" placeholder="Phone or email">
+          </label>
+          <label>
+            <span>Notes</span>
+            <textarea name="notes" rows="4" placeholder="Clothes, distinguishing marks, case details"></textarea>
+          </label>
+          <label class="upload">
+            <span>Reference Images</span>
+            <input id="referenceImage" name="image" type="file" accept="image/*" multiple required>
+          </label>
+          <button type="submit">Save Profile</button>
+        </form>
+        <p id="registerMessage" class="message"></p>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <h2>Recognition Camera</h2>
+          <p>Capture from the laptop webcam and record every scan attempt in history.</p>
+        </div>
+        <div class="camera-shell">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="snapshot" hidden></canvas>
+        </div>
+        <div class="actions">
+          <button id="startCamera" type="button">Start Camera</button>
+          <button id="stopCamera" type="button">Stop Camera</button>
+          <button id="captureMatch" type="button">Capture & Match</button>
+        </div>
+        <label>
+          <span>Upload Image for Match</span>
+          <input id="uploadMatchImage" type="file" accept="image/*">
+        </label>
+        <button id="uploadMatchButton" type="button">Find Match from Uploaded File</button>
+        <label>
+          <span>Match Threshold</span>
+          <input id="threshold" type="number" min="0.2" max="1.2" step="0.01" value="0.52">
+        </label>
+        <div id="matchResult" class="match-card empty">No recognition run yet.</div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Match History</h2>
+        <p>Every scan attempt is stored for audit and review.</p>
+      </div>
+      <button id="clearHistoryButton" type="button">Clear Matching History</button>
+      <div id="historyList" class="history-grid"></div>
+    </section>
+
+    <section class="panel">
+      <details class="option-card">
+        <summary>Account Security</summary>
+        <p class="muted">Change your password only when needed.</p>
+        <form id="passwordForm" class="auth-form">
+          <label>
+            <span>Current Password</span>
+            <input name="currentPassword" type="password" required>
+          </label>
+          <label>
+            <span>New Password</span>
+            <input name="newPassword" type="password" minlength="6" required>
+          </label>
+          <button type="submit">Change Password</button>
+        </form>
+        <p id="passwordMessage" class="message"></p>
+      </details>
+    </section>
+
+    <footer class="page-footer muted">
+      Developed by Maniesh, Sree Harish, Pragas Pathy, and Suwin
+    </footer>
+  </main>
+
+  <script>
+    window.loadFaceApi = async function loadFaceApi() {
+      if (window.faceapi) {
+        return "already-loaded";
+      }
+      const sources = ["/vendor/face-api.min.js", "https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"];
+      for (const source of sources) {
+        try {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = source;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+          if (window.faceapi) {
+            window.faceApiSource = source;
+            return source;
+          }
+        } catch (error) {
+          console.error("Failed to load", source, error);
+        }
+      }
+      throw new Error("face-api.js library failed to load");
+    };
+  </script>
+  <script defer src="/app.js"></script>
+</body>
+</html>
