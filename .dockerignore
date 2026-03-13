@@ -1,0 +1,8 @@
+.git
+.gitignore
+backend/out
+server.err.txt
+server.out.txt
+docs
+tools
+README.md

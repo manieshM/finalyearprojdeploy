@@ -42,7 +42,7 @@ public class App {
     public static void main(String[] args) throws IOException {
         Path root = Paths.get("").toAbsolutePath();
         Path frontendDir = root.resolve("frontend");
-        Path storageDir = root.resolve("storage");
+        Path storageDir = storageDirectory(root);
         Files.createDirectories(storageDir.resolve("persons"));
         Files.createDirectories(storageDir.resolve("matches"));
         Files.createDirectories(frontendDir.resolve("models"));
@@ -54,7 +54,9 @@ public class App {
         MatchHistoryRepository historyRepository = new MatchHistoryRepository(storageDir.resolve("matches.tsv"), databaseConfig);
         AuthService authService = new AuthService(storageDir.resolve("users.tsv"), databaseConfig);
 
-        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+        int port = parseIntOrDefault(System.getenv("PORT"), 8080);
+        String host = firstNonBlank(System.getenv("HOST"), "0.0.0.0");
+        HttpServer server = HttpServer.create(new InetSocketAddress(host, port), 0);
         server.createContext("/api/health", new HealthHandler());
         server.createContext("/api/login", new LoginHandler(authService));
         server.createContext("/api/signup", new SignupHandler(authService));
@@ -69,16 +71,25 @@ public class App {
         server.createContext("/api/cases", new CaseManagementHandler(personRepository, historyRepository, authService));
         server.createContext("/api/case-status", new CaseStatusHandler(personRepository, authService));
         server.createContext("/api/reviews", new ReviewStatusHandler(historyRepository, authService));
-        server.createContext("/api/persons", new PersonsHandler(personRepository, storageDir, authService));
+        server.createContext("/api/persons", new PersonsHandler(personRepository, storageDir, authService, new RecognitionService()));
         server.createContext("/api/match", new MatchHandler(personRepository, historyRepository, storageDir, authService));
         server.createContext("/files", new FileHandler(storageDir));
         server.createContext("/", new StaticHandler(frontendDir));
         server.setExecutor(null);
         server.start();
 
-        System.out.println("Server started on http://localhost:8080");
+        System.out.println("Server started on http://" + host + ":" + port);
         System.out.println("Default admin login: admin / admin123");
         System.out.println("Storage mode: " + (databaseConfig.enabled() ? "database (" + databaseConfig.label() + ")" : "local TSV files"));
+        System.out.println("Storage directory: " + storageDir);
+    }
+
+    static Path storageDirectory(Path root) {
+        String configured = trim(System.getenv("APP_DATA_DIR"));
+        if (!configured.isEmpty()) {
+            return Paths.get(configured).toAbsolutePath().normalize();
+        }
+        return root.resolve("storage");
     }
 
     static class HealthHandler implements HttpHandler {
@@ -709,11 +720,13 @@ public class App {
         private final PersonRepository repository;
         private final Path storageDir;
         private final AuthService authService;
+        private final RecognitionService recognitionService;
 
-        PersonsHandler(PersonRepository repository, Path storageDir, AuthService authService) {
+        PersonsHandler(PersonRepository repository, Path storageDir, AuthService authService, RecognitionService recognitionService) {
             this.repository = repository;
             this.storageDir = storageDir;
             this.authService = authService;
+            this.recognitionService = recognitionService;
         }
 
         @Override
@@ -744,11 +757,40 @@ public class App {
             if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
                 MultipartForm form = MultipartForm.parse(exchange.getRequestBody(), contentType);
+                String action = form.getField("action");
+
+                if ("update-last-seen-notes".equalsIgnoreCase(trim(action))) {
+                    String personId = form.getField("personId");
+                    String lastSeen = form.getField("lastSeen");
+                    String notes = form.getField("notes");
+                    String latitude = form.getField("latitude");
+                    String longitude = form.getField("longitude");
+                    boolean hasLocation = !isBlank(latitude) && !isBlank(longitude);
+                    if (isBlank(personId) || (isBlank(lastSeen) && isBlank(notes) && !hasLocation)) {
+                        sendJson(exchange, 400, "{\"error\":\"personId and at least one of lastSeen, notes, or location is required\"}");
+                        return;
+                    }
+                    PersonRecord updated = repository.updateLastSeenNotesAndLocation(
+                            trim(personId),
+                            trim(lastSeen),
+                            trim(notes),
+                            trim(latitude),
+                            trim(longitude)
+                    );
+                    if (updated == null) {
+                        sendJson(exchange, 404, "{\"error\":\"person not found\"}");
+                        return;
+                    }
+                    sendJson(exchange, 200, "{\"person\":" + updated.toAdminJson() + "}");
+                    return;
+                }
 
                 String name = form.getField("name");
                 String age = form.getField("age");
                 String notes = form.getField("notes");
                 String lastSeen = form.getField("lastSeen");
+                String latitude = form.getField("latitude");
+                String longitude = form.getField("longitude");
                 String contact = form.getField("contact");
                 String status = form.getField("status");
                 String descriptorRaw = form.getField("descriptor");
@@ -761,6 +803,27 @@ public class App {
                 }
 
                 float[] descriptor = parseDescriptor(descriptorRaw);
+                String normalizedDescriptorSet = isBlank(descriptorSetRaw) ? descriptorToString(descriptor) : trim(descriptorSetRaw);
+                DuplicateRegistrationMatch duplicate = recognitionService.findRegistrationDuplicate(
+                        repository.readAll(),
+                        parseDescriptorSet(normalizedDescriptorSet),
+                        0.45d
+                );
+                if (duplicate != null) {
+                    sendJson(exchange, 409, "{"
+                            + "\"duplicate\":true,"
+                            + "\"error\":\"This face already exists in the database. A duplicate profile cannot be created.\","
+                            + "\"message\":\"This image already exists in our database. If you are confident in your information, you can update only the last-seen details and notes for this person.\","
+                            + "\"person\":" + duplicate.record().toAdminJson() + ","
+                            + "\"lastSeen\":\"" + escape(duplicate.record().lastSeen()) + "\","
+                            + "\"notes\":\"" + escape(duplicate.record().notes()) + "\","
+                            + "\"latitude\":\"" + escape(duplicate.record().latitude()) + "\","
+                            + "\"longitude\":\"" + escape(duplicate.record().longitude()) + "\","
+                            + "\"distance\":" + formatDouble(duplicate.distance())
+                            + "}");
+                    return;
+                }
+
                 String id = UUID.randomUUID().toString();
                 String extension = extensionFor(image.fileName());
                 Path imagePath = storageDir.resolve("persons").resolve(id + extension);
@@ -771,12 +834,14 @@ public class App {
                         trim(name),
                         trim(age),
                         trim(lastSeen),
+                        trim(latitude),
+                        trim(longitude),
                         trim(contact),
                         trim(notes),
                         isBlank(status) ? "Missing" : trim(status),
                         imagePath.getFileName().toString(),
                         descriptor,
-                        isBlank(descriptorSetRaw) ? descriptorToString(descriptor) : trim(descriptorSetRaw),
+                        normalizedDescriptorSet,
                         Instant.now().toString()
                 );
                 repository.append(record);
@@ -828,7 +893,8 @@ public class App {
 
             float[] probe = parseDescriptor(descriptorRaw);
             double threshold = isBlank(thresholdRaw) ? 0.52d : Double.parseDouble(thresholdRaw);
-            MatchResult result = recognitionService.findBestMatch(repository.readAll(), probe, threshold);
+            List<PersonRecord> persons = repository.readAll();
+            MatchResult result = recognitionService.findBestMatch(persons, probe, threshold);
             List<MatchHistoryRecord> previousHistory = historyRepository.readAll();
 
             String snapshotName = UUID.randomUUID() + extensionFor(snapshot.fileName());
@@ -856,6 +922,7 @@ public class App {
 
             String response;
             if (result.record != null) {
+                PersonRecord displayRecord = mergePersonDetails(result.record, persons);
                 response = "{"
                         + "\"matched\":true,"
                         + "\"distance\":" + formatDouble(result.distance) + ","
@@ -863,7 +930,7 @@ public class App {
                         + "\"confidence\":" + formatDouble(result.confidence) + ","
                         + "\"reviewStatus\":\"" + escape(reviewStatus) + "\","
                         + "\"threshold\":" + formatDouble(threshold) + ","
-                        + "\"person\":" + result.record.toPublicMatchJson() + ","
+                        + "\"person\":" + displayRecord.toPublicMatchJson() + ","
                         + "\"history\":" + historyRecord.toJson()
                         + "}";
             } else {
@@ -1048,6 +1115,8 @@ public class App {
                         + "name VARCHAR(255) NOT NULL,"
                         + "age VARCHAR(32),"
                         + "last_seen VARCHAR(255),"
+                        + "latitude VARCHAR(32),"
+                        + "longitude VARCHAR(32),"
                         + "contact VARCHAR(255),"
                         + "notes TEXT,"
                         + "status VARCHAR(64),"
@@ -1057,6 +1126,8 @@ public class App {
                         + "created_at VARCHAR(64) NOT NULL"
                         + ")");
                 statement.executeUpdate("ALTER TABLE persons ADD COLUMN IF NOT EXISTS descriptor_set TEXT");
+                statement.executeUpdate("ALTER TABLE persons ADD COLUMN IF NOT EXISTS latitude VARCHAR(32)");
+                statement.executeUpdate("ALTER TABLE persons ADD COLUMN IF NOT EXISTS longitude VARCHAR(32)");
                 statement.executeUpdate("CREATE TABLE IF NOT EXISTS match_history ("
                         + "id VARCHAR(80) PRIMARY KEY,"
                         + "matched BOOLEAN NOT NULL,"
@@ -1113,19 +1184,21 @@ public class App {
             }
             try (Connection connection = databaseConfig.openConnection();
                  PreparedStatement statement = connection.prepareStatement(
-                         "INSERT INTO persons (id, name, age, last_seen, contact, notes, status, image_path, descriptor_text, descriptor_set, created_at) "
-                                 + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                         "INSERT INTO persons (id, name, age, last_seen, latitude, longitude, contact, notes, status, image_path, descriptor_text, descriptor_set, created_at) "
+                                 + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 statement.setString(1, record.id());
                 statement.setString(2, record.name());
                 statement.setString(3, record.age());
                 statement.setString(4, record.lastSeen());
-                statement.setString(5, record.contact());
-                statement.setString(6, record.notes());
-                statement.setString(7, record.status());
-                statement.setString(8, record.imagePath());
-                statement.setString(9, descriptorToString(record.descriptor()));
-                statement.setString(10, record.descriptorSet());
-                statement.setString(11, record.createdAt());
+                statement.setString(5, record.latitude());
+                statement.setString(6, record.longitude());
+                statement.setString(7, record.contact());
+                statement.setString(8, record.notes());
+                statement.setString(9, record.status());
+                statement.setString(10, record.imagePath());
+                statement.setString(11, descriptorToString(record.descriptor()));
+                statement.setString(12, record.descriptorSet());
+                statement.setString(13, record.createdAt());
                 statement.executeUpdate();
             } catch (SQLException exception) {
                 throw new IOException("Could not store person in PostgreSQL", exception);
@@ -1137,7 +1210,7 @@ public class App {
                 List<PersonRecord> records = new ArrayList<>();
                 try (Connection connection = databaseConfig.openConnection();
                      PreparedStatement statement = connection.prepareStatement(
-                             "SELECT id, name, age, last_seen, contact, notes, status, image_path, descriptor_text, descriptor_set, created_at "
+                             "SELECT id, name, age, last_seen, latitude, longitude, contact, notes, status, image_path, descriptor_text, descriptor_set, created_at "
                                      + "FROM persons ORDER BY created_at DESC");
                      ResultSet resultSet = statement.executeQuery()) {
                     while (resultSet.next()) {
@@ -1146,6 +1219,8 @@ public class App {
                                 safe(resultSet.getString("name")),
                                 safe(resultSet.getString("age")),
                                 safe(resultSet.getString("last_seen")),
+                                safe(resultSet.getString("latitude")),
+                                safe(resultSet.getString("longitude")),
                                 safe(resultSet.getString("contact")),
                                 safe(resultSet.getString("notes")),
                                 safe(resultSet.getString("status")),
@@ -1193,6 +1268,8 @@ public class App {
                             record.name(),
                             record.age(),
                             record.lastSeen(),
+                            record.latitude(),
+                            record.longitude(),
                             record.contact(),
                             record.notes(),
                             newStatus,
@@ -1210,6 +1287,60 @@ public class App {
                         StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
             }
             return changed;
+        }
+
+        synchronized PersonRecord updateLastSeenNotesAndLocation(String personId, String newLastSeen, String newNotes, String newLatitude, String newLongitude) throws IOException {
+            if (databaseConfig.enabled()) {
+                try (Connection connection = databaseConfig.openConnection();
+                     PreparedStatement statement = connection.prepareStatement(
+                             "UPDATE persons SET last_seen = ?, notes = ?, latitude = ?, longitude = ? WHERE id = ?")) {
+                    statement.setString(1, newLastSeen);
+                    statement.setString(2, newNotes);
+                    statement.setString(3, newLatitude);
+                    statement.setString(4, newLongitude);
+                    statement.setString(5, personId);
+                    if (statement.executeUpdate() == 0) {
+                        return null;
+                    }
+                } catch (SQLException exception) {
+                    throw new IOException("Could not update person details in PostgreSQL", exception);
+                }
+                return readAll().stream()
+                        .filter(record -> record.id().equals(personId))
+                        .findFirst()
+                        .orElse(null);
+            }
+
+            List<PersonRecord> records = readAll();
+            List<String> updated = new ArrayList<>();
+            PersonRecord updatedRecord = null;
+            for (PersonRecord record : records) {
+                PersonRecord next = record;
+                if (record.id().equals(personId)) {
+                    next = new PersonRecord(
+                        record.id(),
+                        record.name(),
+                        record.age(),
+                        isBlank(newLastSeen) ? record.lastSeen() : newLastSeen,
+                        isBlank(newLatitude) ? record.latitude() : newLatitude,
+                        isBlank(newLongitude) ? record.longitude() : newLongitude,
+                        record.contact(),
+                        isBlank(newNotes) ? record.notes() : newNotes,
+                        record.status(),
+                            record.imagePath(),
+                            record.descriptor(),
+                            record.descriptorSet(),
+                            record.createdAt()
+                    );
+                    updatedRecord = next;
+                }
+                updated.add(next.toTsv());
+            }
+            if (updatedRecord != null) {
+                Files.writeString(storageFile, String.join(System.lineSeparator(), updated) + System.lineSeparator(),
+                        StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+            }
+            return updatedRecord;
         }
     }
 
@@ -1709,6 +1840,8 @@ public class App {
             String name,
             String age,
             String lastSeen,
+            String latitude,
+            String longitude,
             String contact,
             String notes,
             String status,
@@ -1723,6 +1856,8 @@ public class App {
                     + "\"name\":\"" + escape(name) + "\","
                     + "\"age\":\"" + escape(age) + "\","
                     + "\"lastSeen\":\"" + escape(lastSeen) + "\","
+                    + "\"latitude\":\"" + escape(latitude) + "\","
+                    + "\"longitude\":\"" + escape(longitude) + "\","
                     + "\"contact\":\"" + escape(contact) + "\","
                     + "\"notes\":\"" + escape(notes) + "\","
                     + "\"status\":\"" + escape(status) + "\","
@@ -1736,8 +1871,12 @@ public class App {
             return "{"
                     + "\"id\":\"" + escape(id) + "\","
                     + "\"name\":\"" + escape(name) + "\","
+                    + "\"age\":\"" + escape(age) + "\","
                     + "\"lastSeen\":\"" + escape(lastSeen) + "\","
-                    + "\"status\":\"" + escape(status) + "\","
+                    + "\"latitude\":\"" + escape(latitude) + "\","
+                    + "\"longitude\":\"" + escape(longitude) + "\","
+                    + "\"contact\":\"" + escape(contact) + "\","
+                    + "\"notes\":\"" + escape(notes) + "\","
                     + "\"imageUrl\":\"/files/persons/" + escape(imagePath) + "\","
                     + "\"createdAt\":\"" + escape(createdAt) + "\""
                     + "}";
@@ -1749,6 +1888,8 @@ public class App {
                     safe(name),
                     safe(age),
                     safe(lastSeen),
+                    safe(latitude),
+                    safe(longitude),
                     safe(contact),
                     safe(notes),
                     safe(status),
@@ -1775,6 +1916,8 @@ public class App {
                         parts[1],
                         parts[2],
                         parts[3],
+                        "",
+                        "",
                         parts[4],
                         parts[5],
                         "Missing",
@@ -1790,6 +1933,8 @@ public class App {
                         parts[1],
                         parts[2],
                         parts[3],
+                        "",
+                        "",
                         parts[4],
                         parts[5],
                         parts[6],
@@ -1797,6 +1942,40 @@ public class App {
                         parseDescriptor(parts[8]),
                         parts[8],
                         parts[9]
+                );
+            }
+            if (parts.length == 11) {
+                return new PersonRecord(
+                        parts[0],
+                        parts[1],
+                        parts[2],
+                        parts[3],
+                        "",
+                        "",
+                        parts[4],
+                        parts[5],
+                        parts[6],
+                        parts[7],
+                        parseDescriptor(parts[8]),
+                        parts[9],
+                        parts[10]
+                );
+            }
+            if (parts.length == 13) {
+                return new PersonRecord(
+                        parts[0],
+                        parts[1],
+                        parts[2],
+                        parts[3],
+                        parts[4],
+                        parts[5],
+                        parts[6],
+                        parts[7],
+                        parts[8],
+                        parts[9],
+                        parseDescriptor(parts[10]),
+                        parts[11],
+                        parts[12]
                 );
             }
             return new PersonRecord(
@@ -1808,9 +1987,11 @@ public class App {
                     parts[5],
                     parts[6],
                     parts[7],
-                    parseDescriptor(parts[8]),
+                    parts[8],
                     parts[9],
-                    parts[10]
+                    parseDescriptor(parts[10]),
+                    parts[11],
+                    parts[12]
             );
         }
     }
@@ -1928,6 +2109,24 @@ public class App {
                     .orElse(new MatchResult(null, Double.NaN, Double.NaN, Double.NaN));
         }
 
+        DuplicateRegistrationMatch findRegistrationDuplicate(List<PersonRecord> records, List<float[]> probes, double threshold) {
+            DuplicateRegistrationMatch best = null;
+            for (PersonRecord record : records) {
+                for (float[] existing : record.descriptorVariants()) {
+                    for (float[] probe : probes) {
+                        double distance = distance(existing, probe);
+                        if (distance > threshold) {
+                            continue;
+                        }
+                        if (best == null || distance < best.distance()) {
+                            best = new DuplicateRegistrationMatch(record, distance);
+                        }
+                    }
+                }
+            }
+            return best;
+        }
+
         private MatchResult bestResultForRecord(PersonRecord record, float[] probe, double threshold) {
             MatchResult best = null;
             for (float[] candidate : record.descriptorVariants()) {
@@ -1958,6 +2157,9 @@ public class App {
     }
 
     record MatchHistoryRecordDistance(MatchHistoryRecord record, double distance) {
+    }
+
+    record DuplicateRegistrationMatch(PersonRecord record, double distance) {
     }
 
     record MatchResult(PersonRecord record, double distance, double cosineSimilarity, double confidence) {
@@ -2008,6 +2210,42 @@ public class App {
             return true;
         }
         return false;
+    }
+
+    static PersonRecord mergePersonDetails(PersonRecord selected, List<PersonRecord> allPersons) {
+        if (selected == null) {
+            return null;
+        }
+        List<PersonRecord> sameName = allPersons.stream()
+                .filter(person -> trim(person.name()).equalsIgnoreCase(trim(selected.name())))
+                .toList();
+        return new PersonRecord(
+                selected.id(),
+                firstNonBlank(selected.name(), sameName.stream().map(PersonRecord::name).toList()),
+                firstNonBlank(selected.age(), sameName.stream().map(PersonRecord::age).toList()),
+                firstNonBlank(selected.lastSeen(), sameName.stream().map(PersonRecord::lastSeen).toList()),
+                firstNonBlank(selected.latitude(), sameName.stream().map(PersonRecord::latitude).toList()),
+                firstNonBlank(selected.longitude(), sameName.stream().map(PersonRecord::longitude).toList()),
+                firstNonBlank(selected.contact(), sameName.stream().map(PersonRecord::contact).toList()),
+                firstNonBlank(selected.notes(), sameName.stream().map(PersonRecord::notes).toList()),
+                selected.status(),
+                firstNonBlank(selected.imagePath(), sameName.stream().map(PersonRecord::imagePath).toList()),
+                selected.descriptor(),
+                selected.descriptorSet(),
+                selected.createdAt()
+        );
+    }
+
+    static String firstNonBlank(String current, List<String> candidates) {
+        if (!isBlank(current)) {
+            return current;
+        }
+        for (String candidate : candidates) {
+            if (!isBlank(candidate)) {
+                return candidate;
+            }
+        }
+        return "";
     }
 
     static void sendJson(HttpExchange exchange, int statusCode, String body) throws IOException {

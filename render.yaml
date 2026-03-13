@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: misssingpersondetection
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: APP_DATA_DIR
+        value: /var/data
+    disk:
+      name: missing-person-storage
+      mountPath: /var/data
+      sizeGB: 1

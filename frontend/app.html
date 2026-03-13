@@ -6,7 +6,13 @@
   <title>Dashboard | Missing Person Recognition System</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  >
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -17,14 +23,20 @@
       <a id="userAccessLink" class="nav-link" href="/users.html">User Access</a>
     </nav>
     <section class="hero">
-      <div>
+      <div class="hero-copy">
         <p class="eyebrow">Protected Workspace</p>
         <h1>Missing Person Recognition System</h1>
-        <p class="lead">Register profiles, run recognition scans, review history, and manage access after sign in.</p>
+        <p class="lead">Register profiles, run recognition scans, review history, and manage access from one response-ready dashboard.</p>
+        <div class="hero-ribbon">
+          <span>Live recognition</span>
+          <span>Profile tracking</span>
+          <span>Case-first workflow</span>
+        </div>
       </div>
       <div class="status-card">
         <span class="status-label">Login Information</span>
         <p id="authState" class="muted">Checking session...</p>
+        <p class="muted">Use this workspace to register cases, review sightings, and keep person records updated.</p>
         <button id="logoutButton" type="button">Logout</button>
       </div>
     </section>
@@ -41,7 +53,13 @@
       <article class="panel">
         <div class="panel-head">
           <h2>Register Missing Person</h2>
-          <p>Create a protected case record from a clear front-facing image.</p>
+          <p>Create a protected case record from a clear front-facing image and keep the person details current.</p>
+        </div>
+        <div class="info-band">
+          <article>
+            <span class="status-label">Best Uploads</span>
+            <p>Use clear, front-facing photos with one visible face and good lighting.</p>
+          </article>
         </div>
         <form id="registerForm" class="stack">
           <label>
@@ -60,6 +78,16 @@
             <span>Last Seen</span>
             <input name="lastSeen" placeholder="Area, date, location">
           </label>
+          <div class="map-picker">
+            <div class="map-picker-head">
+              <span class="status-label">Pin Last Seen Location</span>
+              <button id="useCurrentLocation" type="button" class="ghost-button">Use My Current Location</button>
+            </div>
+            <div id="lastSeenMap" class="map-canvas" aria-label="Last seen location map"></div>
+            <input id="lastSeenLatitude" name="latitude" type="hidden">
+            <input id="lastSeenLongitude" name="longitude" type="hidden">
+            <p id="mapSelectionStatus" class="muted">Click the map to open a larger location picker. The coordinates will be saved automatically.</p>
+          </div>
           <label>
             <span>Emergency Contact</span>
             <input name="contact" placeholder="Phone or email">
@@ -80,7 +108,7 @@
       <article class="panel">
         <div class="panel-head">
           <h2>Recognition Camera</h2>
-          <p>Capture from the laptop webcam and record every scan attempt in history.</p>
+          <p>Capture from the laptop webcam or upload a file and record every scan attempt in history.</p>
         </div>
         <div class="camera-shell">
           <video id="video" autoplay playsinline muted></video>
@@ -137,6 +165,43 @@
     </footer>
   </main>
 
+  <dialog id="duplicateModal" class="modal">
+    <div class="modal-card">
+      <p class="eyebrow">Existing Match Found</p>
+      <h2>Image already exists in the database</h2>
+      <p id="duplicateMessage" class="lead compact">
+        This image appears to match a person already in the database.
+      </p>
+      <div class="last-seen-card">
+        <span class="status-label">Latest Last Seen</span>
+        <p id="duplicateLastSeen">Not available.</p>
+      </div>
+      <div class="last-seen-card">
+        <span class="status-label">Existing Notes</span>
+        <p id="duplicateNotes">Not available.</p>
+      </div>
+      <p class="muted compact">This image already exists in our database. If you are confident in your information, you can update only the last-seen details and notes for this person.</p>
+      <div class="modal-actions">
+        <button id="confirmDuplicateUpdate" type="button">Update Existing</button>
+        <button id="closeDuplicateModal" type="button">Cancel</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="mapModal" class="modal map-modal">
+    <div class="modal-card map-modal-card">
+      <div class="map-modal-head">
+        <div>
+          <p class="eyebrow">Location Picker</p>
+          <h2>Pin Last Seen Location</h2>
+        </div>
+        <button id="closeMapModal" type="button" class="ghost-button">Close Map</button>
+      </div>
+      <div id="lastSeenMapExpanded" class="map-canvas map-canvas-expanded" aria-label="Expanded last seen location map"></div>
+      <p class="muted compact">Click anywhere on the map to place the pin. Drag the pin if you need to adjust the exact location.</p>
+    </div>
+  </dialog>
+
   <script>
     window.loadFaceApi = async function loadFaceApi() {
       if (window.faceapi) {
@@ -163,6 +228,11 @@
       throw new Error("face-api.js library failed to load");
     };
   </script>
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
   <script defer src="/app.js"></script>
 </body>
 </html>
