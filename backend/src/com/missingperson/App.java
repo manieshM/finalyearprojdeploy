@@ -1064,12 +1064,10 @@ public class App {
 
         @Override
         public String store(String category, String id, MultipartForm.FilePart file) throws IOException {
-            String publicId = category + "_" + id;
             String extension = extensionFor(file.fileName());
             String mimeType = contentTypeForName(id + extension);
             String dataUri = "data:" + mimeType + ";base64," + Base64.getEncoder().encodeToString(file.content());
             String payload = "upload_preset=" + urlEncode(uploadPreset)
-                    + "&public_id=" + urlEncode(publicId)
                     + "&file=" + urlEncode(dataUri);
 
             HttpRequest request = HttpRequest.newBuilder()
