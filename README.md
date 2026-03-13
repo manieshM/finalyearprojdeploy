@@ -39,3 +39,19 @@ Final-year project starter for a cloud-based missing person recognition system.
 - Add multi-image enrollment per person
 - Add email or SMS alerts on match
 - Move recognition to a dedicated backend inference service if your faculty expects server-side AI
+
+## Free public hosting setup
+
+To avoid data reset on free hosting:
+
+- Use PostgreSQL for app data by setting:
+  - `APP_DB_URL`
+  - `APP_DB_USER`
+  - `APP_DB_PASSWORD`
+- Use Cloudinary for images by setting:
+  - `APP_IMAGE_BACKEND=cloudinary`
+  - `APP_CLOUDINARY_CLOUD_NAME`
+  - `APP_CLOUDINARY_UPLOAD_PRESET`
+
+If Cloudinary variables are not set, the app falls back to local file storage.
+

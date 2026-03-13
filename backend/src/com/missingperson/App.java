@@ -10,7 +10,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.URLDecoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,6 +54,7 @@ public class App {
 
         DatabaseConfig databaseConfig = DatabaseConfig.fromEnvironment();
         databaseConfig.ensureSchema();
+        ImageStorage imageStorage = ImageStorage.fromEnvironment(storageDir);
         PersonRepository personRepository = new PersonRepository(storageDir.resolve("persons.tsv"), databaseConfig);
         MatchHistoryRepository historyRepository = new MatchHistoryRepository(storageDir.resolve("matches.tsv"), databaseConfig);
         AuthService authService = new AuthService(storageDir.resolve("users.tsv"), databaseConfig);
@@ -71,8 +76,8 @@ public class App {
         server.createContext("/api/cases", new CaseManagementHandler(personRepository, historyRepository, authService));
         server.createContext("/api/case-status", new CaseStatusHandler(personRepository, authService));
         server.createContext("/api/reviews", new ReviewStatusHandler(historyRepository, authService));
-        server.createContext("/api/persons", new PersonsHandler(personRepository, storageDir, authService, new RecognitionService()));
-        server.createContext("/api/match", new MatchHandler(personRepository, historyRepository, storageDir, authService));
+        server.createContext("/api/persons", new PersonsHandler(personRepository, imageStorage, authService, new RecognitionService()));
+        server.createContext("/api/match", new MatchHandler(personRepository, historyRepository, imageStorage, authService));
         server.createContext("/files", new FileHandler(storageDir));
         server.createContext("/", new StaticHandler(frontendDir));
         server.setExecutor(null);
@@ -82,6 +87,7 @@ public class App {
         System.out.println("Default admin login: admin / admin123");
         System.out.println("Storage mode: " + (databaseConfig.enabled() ? "database (" + databaseConfig.label() + ")" : "local TSV files"));
         System.out.println("Storage directory: " + storageDir);
+        System.out.println("Image storage: " + imageStorage.label());
     }
 
     static Path storageDirectory(Path root) {
@@ -718,13 +724,13 @@ public class App {
 
     static class PersonsHandler implements HttpHandler {
         private final PersonRepository repository;
-        private final Path storageDir;
+        private final ImageStorage imageStorage;
         private final AuthService authService;
         private final RecognitionService recognitionService;
 
-        PersonsHandler(PersonRepository repository, Path storageDir, AuthService authService, RecognitionService recognitionService) {
+        PersonsHandler(PersonRepository repository, ImageStorage imageStorage, AuthService authService, RecognitionService recognitionService) {
             this.repository = repository;
-            this.storageDir = storageDir;
+            this.imageStorage = imageStorage;
             this.authService = authService;
             this.recognitionService = recognitionService;
         }
@@ -825,9 +831,13 @@ public class App {
                 }
 
                 String id = UUID.randomUUID().toString();
-                String extension = extensionFor(image.fileName());
-                Path imagePath = storageDir.resolve("persons").resolve(id + extension);
-                Files.write(imagePath, image.content());
+                String imagePath;
+                try {
+                    imagePath = imageStorage.store("persons", id, image);
+                } catch (IOException exception) {
+                    sendJson(exchange, 502, "{\"error\":\"Image upload failed. Check Cloudinary configuration and try again.\"}");
+                    return;
+                }
 
                 PersonRecord record = new PersonRecord(
                         id,
@@ -839,7 +849,7 @@ public class App {
                         trim(contact),
                         trim(notes),
                         isBlank(status) ? "Missing" : trim(status),
-                        imagePath.getFileName().toString(),
+                        imagePath,
                         descriptor,
                         normalizedDescriptorSet,
                         Instant.now().toString()
@@ -856,14 +866,14 @@ public class App {
     static class MatchHandler implements HttpHandler {
         private final PersonRepository repository;
         private final MatchHistoryRepository historyRepository;
-        private final Path storageDir;
+        private final ImageStorage imageStorage;
         private final AuthService authService;
         private final RecognitionService recognitionService = new RecognitionService();
 
-        MatchHandler(PersonRepository repository, MatchHistoryRepository historyRepository, Path storageDir, AuthService authService) {
+        MatchHandler(PersonRepository repository, MatchHistoryRepository historyRepository, ImageStorage imageStorage, AuthService authService) {
             this.repository = repository;
             this.historyRepository = historyRepository;
-            this.storageDir = storageDir;
+            this.imageStorage = imageStorage;
             this.authService = authService;
         }
 
@@ -897,8 +907,13 @@ public class App {
             MatchResult result = recognitionService.findBestMatch(persons, probe, threshold);
             List<MatchHistoryRecord> previousHistory = historyRepository.readAll();
 
-            String snapshotName = UUID.randomUUID() + extensionFor(snapshot.fileName());
-            Files.write(storageDir.resolve("matches").resolve(snapshotName), snapshot.content());
+            String snapshotName;
+            try {
+                snapshotName = imageStorage.store("matches", UUID.randomUUID().toString(), snapshot);
+            } catch (IOException exception) {
+                sendJson(exchange, 502, "{\"error\":\"Snapshot upload failed. Check Cloudinary configuration and try again.\"}");
+                return;
+            }
             String confidenceValue = result.record != null ? formatDouble(result.confidence) : "";
             String reviewStatus = result.record != null && result.confidence < 78d ? "review_required" : (result.record != null ? "confirmed" : "unknown");
             String unknownGroupId = result.record == null ? recognitionService.assignUnknownGroup(previousHistory, probe) : "";
@@ -992,6 +1007,93 @@ public class App {
                 return;
             }
             sendBytes(exchange, 200, Files.readAllBytes(file), contentType(file));
+        }
+    }
+
+    interface ImageStorage {
+        String store(String category, String id, MultipartForm.FilePart file) throws IOException;
+
+        String label();
+
+        static ImageStorage fromEnvironment(Path storageDir) {
+            String backend = trim(System.getenv("APP_IMAGE_BACKEND"));
+            if ("cloudinary".equalsIgnoreCase(backend)) {
+                String cloudName = trim(System.getenv("APP_CLOUDINARY_CLOUD_NAME"));
+                String uploadPreset = trim(System.getenv("APP_CLOUDINARY_UPLOAD_PRESET"));
+                if (!cloudName.isEmpty() && !uploadPreset.isEmpty()) {
+                    return new CloudinaryImageStorage(cloudName, uploadPreset, storageDir);
+                }
+                System.out.println("APP_IMAGE_BACKEND=cloudinary requested, but credentials are missing. Falling back to local files.");
+            }
+            return new LocalImageStorage(storageDir);
+        }
+    }
+
+    static class LocalImageStorage implements ImageStorage {
+        private final Path storageDir;
+
+        LocalImageStorage(Path storageDir) {
+            this.storageDir = storageDir;
+        }
+
+        @Override
+        public String store(String category, String id, MultipartForm.FilePart file) throws IOException {
+            String extension = extensionFor(file.fileName());
+            Path target = storageDir.resolve(category).resolve(id + extension);
+            Files.write(target, file.content());
+            return target.getFileName().toString();
+        }
+
+        @Override
+        public String label() {
+            return "local";
+        }
+    }
+
+    static class CloudinaryImageStorage implements ImageStorage {
+        private final HttpClient client = HttpClient.newHttpClient();
+        private final String cloudName;
+        private final String uploadPreset;
+
+        CloudinaryImageStorage(String cloudName, String uploadPreset, Path storageDir) {
+            this.cloudName = cloudName;
+            this.uploadPreset = uploadPreset;
+        }
+
+        @Override
+        public String store(String category, String id, MultipartForm.FilePart file) throws IOException {
+            String publicId = category + "/" + id;
+            String extension = extensionFor(file.fileName());
+            String mimeType = contentTypeForName(id + extension);
+            String dataUri = "data:" + mimeType + ";base64," + Base64.getEncoder().encodeToString(file.content());
+            String payload = "upload_preset=" + urlEncode(uploadPreset)
+                    + "&public_id=" + urlEncode(publicId)
+                    + "&file=" + urlEncode(dataUri);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api.cloudinary.com/v1_1/" + cloudName + "/image/upload"))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                    .build();
+            try {
+                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    throw new IOException("Cloudinary upload failed: " + response.statusCode() + " " + response.body());
+                }
+                String secureUrl = jsonValue(response.body(), "secure_url");
+                if (isBlank(secureUrl)) {
+                    throw new IOException("Cloudinary upload succeeded but secure_url was missing");
+                }
+                return secureUrl;
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Cloudinary upload interrupted", exception);
+            }
+        }
+
+        @Override
+        public String label() {
+            return "cloudinary";
         }
     }
 
@@ -1861,7 +1963,7 @@ public class App {
                     + "\"contact\":\"" + escape(contact) + "\","
                     + "\"notes\":\"" + escape(notes) + "\","
                     + "\"status\":\"" + escape(status) + "\","
-                    + "\"imageUrl\":\"/files/persons/" + escape(imagePath) + "\","
+                    + "\"imageUrl\":\"" + escape(publicAssetUrl("persons", imagePath)) + "\","
                     + "\"referenceCount\":" + descriptorVariantCount() + ","
                     + "\"createdAt\":\"" + escape(createdAt) + "\""
                     + "}";
@@ -1877,7 +1979,7 @@ public class App {
                     + "\"longitude\":\"" + escape(longitude) + "\","
                     + "\"contact\":\"" + escape(contact) + "\","
                     + "\"notes\":\"" + escape(notes) + "\","
-                    + "\"imageUrl\":\"/files/persons/" + escape(imagePath) + "\","
+                    + "\"imageUrl\":\"" + escape(publicAssetUrl("persons", imagePath)) + "\","
                     + "\"createdAt\":\"" + escape(createdAt) + "\""
                     + "}";
         }
@@ -2023,7 +2125,7 @@ public class App {
                     + "\"threshold\":" + (isBlank(threshold) ? "null" : threshold) + ","
                     + "\"reviewStatus\":\"" + escape(reviewStatus) + "\","
                     + "\"unknownGroupId\":\"" + escape(unknownGroupId) + "\","
-                    + "\"snapshotUrl\":\"/files/matches/" + escape(snapshotPath) + "\","
+                    + "\"snapshotUrl\":\"" + escape(publicAssetUrl("matches", snapshotPath)) + "\","
                     + "\"createdAt\":\"" + escape(createdAt) + "\""
                     + "}";
         }
@@ -2522,5 +2624,72 @@ public class App {
         } catch (NumberFormatException exception) {
             return fallback;
         }
+    }
+
+    static String urlEncode(String value) {
+        return java.net.URLEncoder.encode(safe(value), StandardCharsets.UTF_8);
+    }
+
+    static String publicAssetUrl(String category, String value) {
+        String normalized = safe(value);
+        if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+            return normalized;
+        }
+        return "/files/" + category + "/" + normalized;
+    }
+
+    static void writeMultipartText(ByteArrayOutputStream out, String boundary, String name, String value) throws IOException {
+        out.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(value.getBytes(StandardCharsets.UTF_8));
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+    }
+
+    static void writeMultipartFile(ByteArrayOutputStream out, String boundary, String name, String fileName, String contentType, byte[] bytes) throws IOException {
+        out.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Content-Disposition: form-data; name=\"" + name + "\"; filename=\"" + fileName + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Content-Type: " + contentType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(bytes);
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+    }
+
+    static String jsonValue(String raw, String key) {
+        String pattern = "\"" + key + "\":\"";
+        int start = raw.indexOf(pattern);
+        if (start < 0) {
+            return "";
+        }
+        int valueStart = start + pattern.length();
+        StringBuilder builder = new StringBuilder();
+        boolean escaped = false;
+        for (int index = valueStart; index < raw.length(); index++) {
+            char current = raw.charAt(index);
+            if (current == '"' && !escaped) {
+                break;
+            }
+            if (escaped) {
+                builder.append(current);
+                escaped = false;
+                continue;
+            }
+            if (current == '\\') {
+                escaped = true;
+                continue;
+            }
+            builder.append(current);
+        }
+        return builder.toString().replace("\\/", "/");
+    }
+
+    static String contentTypeForName(String fileName) {
+
+        String lower = safe(fileName).toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".png")) {
+            return "image/png";
+        }
+        if (lower.endsWith(".webp")) {
+            return "image/webp";
+        }
+        return "image/jpeg";
     }
 }
