@@ -78,10 +78,13 @@ function renderCases(cases) {
           <p class="muted">Latest sighting: ${entry.latestSighting ? new Date(entry.latestSighting).toLocaleString() : "No confirmed sighting yet"}</p>
         </div>
         ${canCaseEdit || currentRole === "admin" ? `
-          <select data-person-id="${entry.person.id}">
-            ${caseStatusOptions(entry.person.status || "Missing")}
-          </select>
-          <button type="button" data-save-status="${entry.person.id}">Update Lifecycle</button>
+          <div class="action-cluster">
+            <select data-person-id="${entry.person.id}">
+              ${caseStatusOptions(entry.person.status || "Missing")}
+            </select>
+            <button type="button" data-save-status="${entry.person.id}">Update Lifecycle</button>
+            <button type="button" class="button-danger" data-delete-person="${entry.person.id}" data-delete-person-name="${entry.person.name}">Delete Person</button>
+          </div>
         ` : `<span class="badge">Read Only Access</span>`}
       </div>
     </article>
@@ -167,6 +170,34 @@ document.addEventListener("click", async (event) => {
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || "Could not update lifecycle");
+      }
+      await loadCasePage();
+    } catch (error) {
+      alert(error.message);
+    }
+    return;
+  }
+
+  const deletePersonButton = event.target.closest("[data-delete-person]");
+  if (deletePersonButton) {
+    if (!(canCaseEdit || currentRole === "admin")) {
+      alert("Admin approval is required to edit case management.");
+      return;
+    }
+    const personId = deletePersonButton.getAttribute("data-delete-person");
+    const personName = deletePersonButton.getAttribute("data-delete-person-name") || "this person";
+    if (!window.confirm(`Delete ${personName}? This removes the registered person record and related match history.`)) {
+      return;
+    }
+    try {
+      const response = await apiFetch("/api/cases", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Could not delete person");
       }
       await loadCasePage();
     } catch (error) {

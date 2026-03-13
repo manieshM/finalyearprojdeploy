@@ -80,7 +80,7 @@ public class App {
         server.createContext("/api/dashboard", new DashboardHandler(personRepository, historyRepository, authService));
         server.createContext("/api/history", new HistoryHandler(historyRepository, storageDir, authService));
         server.createContext("/api/review-insights", new ReviewInsightsHandler(historyRepository, authService));
-        server.createContext("/api/cases", new CaseManagementHandler(personRepository, historyRepository, authService));
+        server.createContext("/api/cases", new CaseManagementHandler(personRepository, historyRepository, storageDir, authService));
         server.createContext("/api/case-status", new CaseStatusHandler(personRepository, authService));
         server.createContext("/api/reviews", new ReviewStatusHandler(historyRepository, authService));
         server.createContext("/api/persons", new PersonsHandler(personRepository, imageStorage, authService, new RecognitionService()));
@@ -382,6 +382,36 @@ public class App {
                     return;
                 }
 
+                if ("delete_user".equalsIgnoreCase(action)) {
+                    String targetEmail = trim(firstNonBlank(body.get("email"), body.get("username")));
+                    if (isBlank(targetEmail)) {
+                        sendJson(exchange, 400, "{\"error\":\"email is required\"}");
+                        return;
+                    }
+                    UserRecord targetUser = authService.listUsers().stream()
+                            .filter(user -> user.username().equalsIgnoreCase(targetEmail))
+                            .findFirst()
+                            .orElse(null);
+                    if (targetUser == null) {
+                        sendJson(exchange, 404, "{\"error\":\"user not found\"}");
+                        return;
+                    }
+                    if ("admin".equalsIgnoreCase(targetUser.role())) {
+                        sendJson(exchange, 400, "{\"error\":\"admin users cannot be deleted from this page\"}");
+                        return;
+                    }
+                    if (targetUser.username().equalsIgnoreCase(session.username())) {
+                        sendJson(exchange, 400, "{\"error\":\"you cannot delete your current account\"}");
+                        return;
+                    }
+                    if (!authService.deleteUser(targetUser.username())) {
+                        sendJson(exchange, 404, "{\"error\":\"user not found\"}");
+                        return;
+                    }
+                    sendJson(exchange, 200, "{\"status\":\"user_deleted\"}");
+                    return;
+                }
+
                 String username = trim(firstNonBlank(body.get("email"), body.get("username")));
                 String password = trim(body.get("password"));
                 String role = trim(body.get("role"));
@@ -602,11 +632,13 @@ public class App {
     static class CaseManagementHandler implements HttpHandler {
         private final PersonRepository personRepository;
         private final MatchHistoryRepository historyRepository;
+        private final Path storageDir;
         private final AuthService authService;
 
-        CaseManagementHandler(PersonRepository personRepository, MatchHistoryRepository historyRepository, AuthService authService) {
+        CaseManagementHandler(PersonRepository personRepository, MatchHistoryRepository historyRepository, Path storageDir, AuthService authService) {
             this.personRepository = personRepository;
             this.historyRepository = historyRepository;
+            this.storageDir = storageDir;
             this.authService = authService;
         }
 
@@ -615,6 +647,32 @@ public class App {
             if (handleCors(exchange)) {
                 return;
             }
+            if ("DELETE".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (requireCaseEditor(exchange, authService) == null) {
+                    return;
+                }
+                Map<String, String> body = parseSimpleJson(readString(exchange.getRequestBody()));
+                String personId = trim(body.get("personId"));
+                if (isBlank(personId)) {
+                    sendJson(exchange, 400, "{\"error\":\"personId is required\"}");
+                    return;
+                }
+
+                PersonRecord deletedPerson = personRepository.delete(personId);
+                if (deletedPerson == null) {
+                    sendJson(exchange, 404, "{\"error\":\"person not found\"}");
+                    return;
+                }
+
+                List<String> deletedSnapshots = historyRepository.deleteByPersonId(personId);
+                deleteStoredAsset(storageDir, "persons", deletedPerson.imagePath());
+                for (String snapshotPath : deletedSnapshots.stream().filter(path -> !isBlank(path)).distinct().toList()) {
+                    deleteStoredAsset(storageDir, "matches", snapshotPath);
+                }
+                sendJson(exchange, 200, "{\"status\":\"person_deleted\"}");
+                return;
+            }
+
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 sendJson(exchange, 405, "{\"error\":\"method not allowed\"}");
                 return;
@@ -1362,6 +1420,48 @@ public class App {
             return records;
         }
 
+        synchronized PersonRecord delete(String personId) throws IOException {
+            if (databaseConfig.enabled()) {
+                PersonRecord deleted = readAll().stream()
+                        .filter(record -> record.id().equals(personId))
+                        .findFirst()
+                        .orElse(null);
+                if (deleted == null) {
+                    return null;
+                }
+                try (Connection connection = databaseConfig.openConnection();
+                     PreparedStatement statement = connection.prepareStatement("DELETE FROM persons WHERE id = ?")) {
+                    statement.setString(1, personId);
+                    if (statement.executeUpdate() == 0) {
+                        return null;
+                    }
+                } catch (SQLException exception) {
+                    throw new IOException("Could not delete person from PostgreSQL", exception);
+                }
+                return deleted;
+            }
+
+            List<PersonRecord> records = readAll();
+            List<String> updated = new ArrayList<>();
+            PersonRecord deleted = null;
+            for (PersonRecord record : records) {
+                if (record.id().equals(personId)) {
+                    deleted = record;
+                    continue;
+                }
+                updated.add(record.toTsv());
+            }
+            if (deleted != null) {
+                Files.writeString(
+                        storageFile,
+                        updated.isEmpty() ? "" : String.join(System.lineSeparator(), updated) + System.lineSeparator(),
+                        StandardCharsets.UTF_8,
+                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+                );
+            }
+            return deleted;
+        }
+
         synchronized boolean updateStatus(String personId, String newStatus) throws IOException {
             if (databaseConfig.enabled()) {
                 try (Connection connection = databaseConfig.openConnection();
@@ -1544,6 +1644,50 @@ public class App {
                 }
             }
             return records;
+        }
+
+        synchronized List<String> deleteByPersonId(String personId) throws IOException {
+            List<String> deletedSnapshotPaths = new ArrayList<>();
+            if (databaseConfig.enabled()) {
+                try (Connection connection = databaseConfig.openConnection();
+                     PreparedStatement select = connection.prepareStatement(
+                             "SELECT snapshot_path FROM match_history WHERE person_id = ?");
+                     PreparedStatement delete = connection.prepareStatement(
+                             "DELETE FROM match_history WHERE person_id = ?")) {
+                    select.setString(1, personId);
+                    try (ResultSet resultSet = select.executeQuery()) {
+                        while (resultSet.next()) {
+                            deletedSnapshotPaths.add(safe(resultSet.getString("snapshot_path")));
+                        }
+                    }
+                    delete.setString(1, personId);
+                    delete.executeUpdate();
+                } catch (SQLException exception) {
+                    throw new IOException("Could not delete person history from PostgreSQL", exception);
+                }
+                return deletedSnapshotPaths;
+            }
+
+            List<MatchHistoryRecord> records = readAll();
+            List<String> updated = new ArrayList<>();
+            boolean changed = false;
+            for (MatchHistoryRecord record : records) {
+                if (record.personId().equals(personId)) {
+                    deletedSnapshotPaths.add(record.snapshotPath());
+                    changed = true;
+                    continue;
+                }
+                updated.add(record.toTsv());
+            }
+            if (changed) {
+                Files.writeString(
+                        storageFile,
+                        updated.isEmpty() ? "" : String.join(System.lineSeparator(), updated) + System.lineSeparator(),
+                        StandardCharsets.UTF_8,
+                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+                );
+            }
+            return deletedSnapshotPaths;
         }
 
         synchronized void clear() throws IOException {
@@ -1845,6 +1989,53 @@ public class App {
                 }
             }
             return users;
+        }
+
+        synchronized boolean deleteUser(String username) throws IOException {
+            if (databaseConfig.enabled()) {
+                try (Connection connection = databaseConfig.openConnection();
+                     PreparedStatement statement = connection.prepareStatement(
+                             "DELETE FROM users WHERE LOWER(email) = LOWER(?)")) {
+                    statement.setString(1, username);
+                    boolean deleted = statement.executeUpdate() > 0;
+                    if (deleted) {
+                        resetCodes.remove(username.toLowerCase(Locale.ROOT));
+                        invalidateUserSessions(username);
+                    }
+                    return deleted;
+                } catch (SQLException exception) {
+                    throw new IOException("Could not delete user from PostgreSQL", exception);
+                }
+            }
+
+            List<String> updated = new ArrayList<>();
+            boolean changed = false;
+            for (String line : Files.readAllLines(userFile, StandardCharsets.UTF_8)) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                String[] parts = line.split("\t", -1);
+                if (parts.length >= 1 && parts[0].equalsIgnoreCase(username)) {
+                    changed = true;
+                    continue;
+                }
+                updated.add(line);
+            }
+            if (changed) {
+                Files.writeString(
+                        userFile,
+                        updated.isEmpty() ? "" : String.join(System.lineSeparator(), updated) + System.lineSeparator(),
+                        StandardCharsets.UTF_8,
+                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+                );
+                resetCodes.remove(username.toLowerCase(Locale.ROOT));
+                invalidateUserSessions(username);
+            }
+            return changed;
+        }
+
+        void invalidateUserSessions(String username) {
+            sessions.entrySet().removeIf(entry -> entry.getValue().username().equalsIgnoreCase(username));
         }
 
         synchronized boolean updateCaseAccess(String username, boolean canCaseEdit) throws IOException {
@@ -2664,6 +2855,23 @@ public class App {
             return normalized;
         }
         return "/files/" + category + "/" + normalized;
+    }
+
+    static void deleteStoredAsset(Path storageDir, String category, String value) {
+        String normalized = safe(value);
+        if (isBlank(normalized) || normalized.startsWith("http://") || normalized.startsWith("https://")) {
+            return;
+        }
+        Path baseDir = storageDir.resolve(category).toAbsolutePath().normalize();
+        Path target = baseDir.resolve(normalized).normalize();
+        if (!target.startsWith(baseDir)) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(target);
+        } catch (IOException exception) {
+            System.err.println("Could not delete stored asset: " + target + " - " + exception.getMessage());
+        }
     }
 
     static void writeMultipartText(ByteArrayOutputStream out, String boundary, String name, String value) throws IOException {

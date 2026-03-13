@@ -444,6 +444,18 @@ label span {
   justify-content: space-between;
 }
 
+.action-cluster,
+.history-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.history-actions {
+  justify-content: flex-end;
+}
+
 .badge {
   display: inline-block;
   padding: 6px 10px;
@@ -466,7 +478,8 @@ label span {
 
 .case-actions select,
 .review-actions button,
-.case-actions button {
+.case-actions button,
+.history-actions button {
   width: auto;
   min-width: 140px;
 }
@@ -527,6 +540,15 @@ button:hover {
   transform: translateY(-1px);
   filter: brightness(1.02);
   box-shadow: 0 24px 40px rgba(193, 18, 31, 0.3);
+}
+
+.button-danger {
+  background: linear-gradient(135deg, #3c0911 0%, #7f0d16 44%, #ff6b6b 100%);
+  box-shadow: 0 18px 34px rgba(127, 13, 22, 0.22);
+}
+
+.button-danger:hover {
+  box-shadow: 0 24px 40px rgba(127, 13, 22, 0.3);
 }
 
 .camera-shell {

@@ -53,8 +53,11 @@ function renderUsers(users) {
         <p class="muted">Role: ${user.role}</p>
         <p class="muted">Case Edit Access: ${user.role === "admin" ? "Full Access" : user.canCaseEdit ? "Approved" : "Read Only"}</p>
       </div>
-      <div>
-        ${user.role !== "admin" ? `<button type="button" data-case-access-email="${user.email}" data-case-access="${user.canCaseEdit ? "false" : "true"}">${user.canCaseEdit ? "Revoke Case Edit" : "Approve Case Edit"}</button>` : ""}
+      <div class="history-actions">
+        ${user.role !== "admin" ? `
+          <button type="button" data-case-access-email="${user.email}" data-case-access="${user.canCaseEdit ? "false" : "true"}">${user.canCaseEdit ? "Revoke Case Edit" : "Approve Case Edit"}</button>
+          <button type="button" class="button-danger" data-delete-user="${user.email}">Delete User</button>
+        ` : ""}
       </div>
     </article>
   `).join("");
@@ -105,6 +108,35 @@ userForm.addEventListener("submit", async (event) => {
 });
 
 document.addEventListener("click", async (event) => {
+  const deleteButton = event.target.closest("[data-delete-user]");
+  if (deleteButton) {
+    const email = deleteButton.getAttribute("data-delete-user");
+    if (!window.confirm(`Delete ${email}? This user will lose access to the site.`)) {
+      return;
+    }
+    try {
+      const response = await apiFetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete_user",
+          email
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Could not delete user");
+      }
+      userMessage.textContent = `User deleted: ${email}`;
+      userMessage.className = "message success";
+      await loadUsers();
+    } catch (error) {
+      userMessage.textContent = error.message;
+      userMessage.className = "message danger";
+    }
+    return;
+  }
+
   const accessButton = event.target.closest("[data-case-access-email]");
   if (!accessButton) {
     return;
@@ -123,6 +155,8 @@ document.addEventListener("click", async (event) => {
     if (!response.ok) {
       throw new Error(data.error || "Could not update access");
     }
+    userMessage.textContent = `Access updated for ${accessButton.getAttribute("data-case-access-email")}`;
+    userMessage.className = "message success";
     await loadUsers();
   } catch (error) {
     userMessage.textContent = error.message;
