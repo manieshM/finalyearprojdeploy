@@ -835,6 +835,7 @@ public class App {
                 try {
                     imagePath = imageStorage.store("persons", id, image);
                 } catch (IOException exception) {
+                    System.err.println("Image upload failed: " + exception.getMessage());
                     sendJson(exchange, 502, "{\"error\":\"Image upload failed. Check Cloudinary configuration and try again.\"}");
                     return;
                 }
@@ -911,6 +912,7 @@ public class App {
             try {
                 snapshotName = imageStorage.store("matches", UUID.randomUUID().toString(), snapshot);
             } catch (IOException exception) {
+                System.err.println("Snapshot upload failed: " + exception.getMessage());
                 sendJson(exchange, 502, "{\"error\":\"Snapshot upload failed. Check Cloudinary configuration and try again.\"}");
                 return;
             }
