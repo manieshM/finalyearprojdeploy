@@ -52,6 +52,7 @@ To avoid data reset on free hosting:
   - `APP_IMAGE_BACKEND=cloudinary`
   - `APP_CLOUDINARY_CLOUD_NAME`
   - `APP_CLOUDINARY_UPLOAD_PRESET`
+  - In the Cloudinary unsigned upload preset, keep `use_filename_as_display_name` turned off to avoid slash-related upload failures.
 
 If Cloudinary variables are not set, the app falls back to local file storage.
 

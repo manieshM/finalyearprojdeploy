@@ -47,20 +47,27 @@ public class App {
         Path root = Paths.get("").toAbsolutePath();
         Path frontendDir = root.resolve("frontend");
         Path storageDir = storageDirectory(root);
+        int port = parseIntOrDefault(System.getenv("PORT"), 8080);
+        String host = firstNonBlank(System.getenv("HOST"), "0.0.0.0");
+
+        System.out.println("Booting server with HOST=" + host + ", PORT=" + port);
         Files.createDirectories(storageDir.resolve("persons"));
         Files.createDirectories(storageDir.resolve("matches"));
         Files.createDirectories(frontendDir.resolve("models"));
         Files.createDirectories(frontendDir.resolve("vendor"));
 
         DatabaseConfig databaseConfig = DatabaseConfig.fromEnvironment();
-        databaseConfig.ensureSchema();
+        try {
+            databaseConfig.ensureSchema();
+        } catch (IOException exception) {
+            System.err.println("Startup failed before binding port: " + exception.getMessage());
+            throw exception;
+        }
         ImageStorage imageStorage = ImageStorage.fromEnvironment(storageDir);
         PersonRepository personRepository = new PersonRepository(storageDir.resolve("persons.tsv"), databaseConfig);
         MatchHistoryRepository historyRepository = new MatchHistoryRepository(storageDir.resolve("matches.tsv"), databaseConfig);
         AuthService authService = new AuthService(storageDir.resolve("users.tsv"), databaseConfig);
 
-        int port = parseIntOrDefault(System.getenv("PORT"), 8080);
-        String host = firstNonBlank(System.getenv("HOST"), "0.0.0.0");
         HttpServer server = HttpServer.create(new InetSocketAddress(host, port), 0);
         server.createContext("/api/health", new HealthHandler());
         server.createContext("/api/login", new LoginHandler(authService));
@@ -1064,21 +1071,30 @@ public class App {
 
         @Override
         public String store(String category, String id, MultipartForm.FilePart file) throws IOException {
+            String boundary = "----mpr" + UUID.randomUUID().toString().replace("-", "");
             String extension = extensionFor(file.fileName());
-            String mimeType = contentTypeForName(id + extension);
-            String dataUri = "data:" + mimeType + ";base64," + Base64.getEncoder().encodeToString(file.content());
-            String payload = "upload_preset=" + urlEncode(uploadPreset)
-                    + "&file=" + urlEncode(dataUri);
+            String publicId = cloudinaryPublicId(category, id);
+            String fileName = publicId + extension;
+            ByteArrayOutputStream body = new ByteArrayOutputStream();
+            writeMultipartText(body, boundary, "upload_preset", uploadPreset);
+            writeMultipartText(body, boundary, "public_id", publicId);
+            writeMultipartFile(body, boundary, "file", fileName, contentTypeForName(fileName), file.content());
+            body.write(("--" + boundary + "--\r\n\r\n").getBytes(StandardCharsets.UTF_8));
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create("https://api.cloudinary.com/v1_1/" + cloudName + "/image/upload"))
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray()))
                     .build();
             try {
                 HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                    throw new IOException("Cloudinary upload failed: " + response.statusCode() + " " + response.body());
+                    String responseBody = response.body();
+                    if (responseBody.contains("Display name cannot contain slashes")) {
+                        throw new IOException("Cloudinary upload failed: " + response.statusCode() + " " + responseBody
+                                + ". Check the unsigned upload preset and turn off use_filename_as_display_name.");
+                    }
+                    throw new IOException("Cloudinary upload failed: " + response.statusCode() + " " + responseBody);
                 }
                 String secureUrl = jsonValue(response.body(), "secure_url");
                 if (isBlank(secureUrl)) {
@@ -2406,6 +2422,18 @@ public class App {
         }
         String ext = fileName.substring(lastDot).toLowerCase(Locale.ROOT);
         return ext.matches("\\.[a-z0-9]{1,5}") ? ext : ".bin";
+    }
+
+    static String cloudinaryPublicId(String category, String id) {
+        String normalized = (safe(category) + "_" + safe(id))
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9_-]+", "_")
+                .replaceAll("_+", "_")
+                .replaceAll("^_+|_+$", "");
+        if (!isBlank(normalized)) {
+            return normalized;
+        }
+        return "upload_" + UUID.randomUUID().toString().replace("-", "");
     }
 
     static byte[] readAll(InputStream inputStream) throws IOException {
